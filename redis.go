@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	redispool = &godb.DbConnPool{}
+	redispool = godb.NewDbPool()
 )
 
 func GetRedisClient(db string) *redis.Client {
