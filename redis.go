@@ -2,61 +2,49 @@ package goframework_redis
 
 import (
 	"github.com/go-redis/redis"
-	"github.com/kordar/gocfg"
-	log "github.com/kordar/gologger"
-	"github.com/spf13/cast"
-	"time"
+	"github.com/kordar/godb"
+	logger "github.com/kordar/gologger"
 )
 
-type RedisConnIns struct {
-	name string
-	ins  *redis.Client
+var (
+	redispool = &godb.DbConnPool{}
+)
+
+func GetRedisClient(db string) *redis.Client {
+	return redispool.Handle(db).(*redis.Client)
 }
 
-func NewRedisConnIns(name string) *RedisConnIns {
-	cfg := gocfg.GetSection(name)
-	options := redis.Options{
-		Addr:         cfg["addr"],                                       // Redis地址
-		Password:     cfg["password"],                                   // Redis账号
-		DB:           cast.ToInt(cfg["db"]),                             // Redis库
-		PoolSize:     cast.ToInt(cfg["poolSize"]),                       // Redis连接池大小
-		MaxRetries:   cast.ToInt(cfg["maxRetries"]),                     // 最大重试次数
-		IdleTimeout:  cast.ToDuration(cfg["idleTimeout"]) * time.Second, // 空闲链接超时时间
-		MinIdleConns: cast.ToInt(cfg["minIdleConns"]),                   // 空闲连接数量
-	}
-	client := redis.NewClient(&options)
-	conn := RedisConnIns{name: name}
-	if ok := conn.Ping(client); ok {
-		conn.ins = client
-		return &conn
-	} else {
-		log.Error("实例化redis client异常")
-		return nil
+// InitRedisHandle 初始化redis句柄
+func InitRedisHandle(dbs map[string]map[string]string) {
+	for db, cfg := range dbs {
+		ins := NewRedisConnIns(db, cfg)
+		if ins == nil {
+			continue
+		}
+		err := redispool.Add(ins)
+		if err != nil {
+			logger.Warnf("初始化Redis异常，err=%v", err)
+		}
 	}
 }
 
-func (c RedisConnIns) GetName() string {
-	return c.name
+// AddRedisInstance 添加redis句柄
+func AddRedisInstance(db string, cfg map[string]string) error {
+	ins := NewRedisConnIns(db, cfg)
+	return redispool.Add(ins)
 }
 
-func (c RedisConnIns) GetInstance() interface{} {
-	return c.ins
+func AddRedisInstanceWithRedisOptions(db string, option redis.Options) error {
+	ins := NewRedisConnInsWithRedisOption(db, option)
+	return redispool.Add(ins)
 }
 
-func (c RedisConnIns) Ping(client *redis.Client) bool {
-	pong, err := client.Ping().Result()
-	if err == redis.Nil {
-		log.Warn("Redis异常")
-		return false
-	} else if err != nil {
-		log.Warn("失败:", err)
-		return false
-	} else {
-		log.Info(pong)
-		return true
-	}
+// RemoveRedisInstance 移除redis句柄
+func RemoveRedisInstance(db string) {
+	redispool.Remove(db)
 }
 
-func (c RedisConnIns) Close() error {
-	return c.ins.Close()
+// HasRedisInstance redis句柄是否存在
+func HasRedisInstance(db string) bool {
+	return redispool != nil && redispool.Has(db)
 }
