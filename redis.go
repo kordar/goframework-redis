@@ -2,49 +2,80 @@ package goframework_redis
 
 import (
 	"github.com/go-redis/redis"
-	"github.com/kordar/godb"
-	logger "github.com/kordar/gologger"
+	log "github.com/kordar/gologger"
+	"github.com/spf13/cast"
+	"time"
 )
 
-var (
-	redispool = godb.NewDbPool()
-)
-
-func GetRedisClient(db string) *redis.Client {
-	return redispool.Handle(db).(*redis.Client)
+type RedisConnIns struct {
+	name string
+	ins  *redis.Client
 }
 
-// InitRedisHandle 初始化redis句柄
-func InitRedisHandle(dbs map[string]map[string]string) {
-	for db, cfg := range dbs {
-		ins := NewRedisConnIns(db, cfg)
-		if ins == nil {
-			continue
-		}
-		err := redispool.Add(ins)
-		if err != nil {
-			logger.Warnf("初始化Redis异常，err=%v", err)
-		}
+func NewRedisConnIns(name string, cfg map[string]string) *RedisConnIns {
+	
+	if cfg["poolSize"] == "" { // Redis连接池大小
+		cfg["poolSize"] = "10"
+	}
+
+	if cfg["maxRetries"] == "" { // 最大重试次数
+		cfg["maxRetries"] = "3"
+	}
+
+	if cfg["idleTimeout"] == "" { // 空闲链接超时时间
+		cfg["idleTimeout"] = "5"
+	}
+
+	if cfg["minIdleConns"] == "" { // 空闲连接数量
+		cfg["minIdleConns"] = "3"
+	}
+
+	options := redis.Options{
+		Addr:         cfg["addr"],                                       // Redis地址
+		Password:     cfg["password"],                                   // Redis账号
+		DB:           cast.ToInt(cfg["db"]),                             // Redis库
+		PoolSize:     cast.ToInt(cfg["poolSize"]),                       // Redis连接池大小
+		MaxRetries:   cast.ToInt(cfg["maxRetries"]),                     // 最大重试次数
+		IdleTimeout:  cast.ToDuration(cfg["idleTimeout"]) * time.Second, // 空闲链接超时时间
+		MinIdleConns: cast.ToInt(cfg["minIdleConns"]),                   // 空闲连接数量
+	}
+	return NewRedisConnInsWithRedisOption(name, options)
+}
+
+func NewRedisConnInsWithRedisOption(name string, option redis.Options) *RedisConnIns {
+	client := redis.NewClient(&option)
+	conn := RedisConnIns{name: name}
+	if ok := conn.Ping(client); ok {
+		conn.ins = client
+		return &conn
+	} else {
+		log.Error("[godb-redis] 实例化redis client异常")
+		return nil
 	}
 }
 
-// AddRedisInstance 添加redis句柄
-func AddRedisInstance(db string, cfg map[string]string) error {
-	ins := NewRedisConnIns(db, cfg)
-	return redispool.Add(ins)
+func (c RedisConnIns) GetName() string {
+	return c.name
 }
 
-func AddRedisInstanceWithRedisOptions(db string, option redis.Options) error {
-	ins := NewRedisConnInsWithRedisOption(db, option)
-	return redispool.Add(ins)
+func (c RedisConnIns) GetInstance() interface{} {
+	return c.ins
 }
 
-// RemoveRedisInstance 移除redis句柄
-func RemoveRedisInstance(db string) {
-	redispool.Remove(db)
+func (c RedisConnIns) Ping(client *redis.Client) bool {
+	pong, err := client.Ping().Result()
+	if err == redis.Nil {
+		log.Warn("[godb-redis] Redis异常")
+		return false
+	} else if err != nil {
+		log.Warn("[godb-redis] 失败:", err)
+		return false
+	} else {
+		log.Info(pong)
+		return true
+	}
 }
 
-// HasRedisInstance redis句柄是否存在
-func HasRedisInstance(db string) bool {
-	return redispool != nil && redispool.Has(db)
+func (c RedisConnIns) Close() error {
+	return c.ins.Close()
 }
